@@ -13,67 +13,86 @@ import {
   GlobeIcon,
   BugIcon,
   MessageSquareTextIcon,
+  LayoutDashboard,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "@/contexts";
 import { XIcon, GithubIcon } from "@/components";
+import { useMemo } from "react";
+
+export type MenuItem = {
+  icon: React.ElementType;
+  label: string;
+  href: string;
+  count?: number;
+  children?: MenuItem[];
+};
 
 export const useMenuItems = () => {
   const { hasActiveLicense } = useApp();
 
-  const menu: {
-    icon: React.ElementType;
-    label: string;
-    href: string;
-    count?: number;
-  }[] = [
-    {
-      icon: HomeIcon,
-      label: "Dashboard",
-      href: "/dashboard",
-    },
-    {
-      icon: MessagesSquare,
-      label: "Chats",
-      href: "/chats",
-    },
-    {
-      icon: WandSparkles,
-      label: "System prompts",
-      href: "/system-prompts",
-    },
-    {
-      icon: Settings,
-      label: "App Settings",
-      href: "/settings",
-    },
-    {
-      icon: MessageSquareTextIcon,
-      label: "Responses",
-      href: "/responses",
-    },
-    {
-      icon: MonitorIcon,
-      label: "Screenshot",
-      href: "/screenshot",
-    },
-    {
-      icon: AudioLinesIcon,
-      label: "Audio",
-      href: "/audio",
-    },
-    {
-      icon: SquareSlashIcon,
-      label: "Cursor & Shortcuts",
-      href: "/shortcuts",
-    },
-
-    {
-      icon: Code,
-      label: "Dev space",
-      href: "/dev-space",
-    },
-  ];
+  const menu: MenuItem[] = useMemo(
+    () => [
+      {
+        icon: HomeIcon,
+        label: "Home",
+        href: "/home",
+      },
+      {
+        icon: MessagesSquare,
+        label: "Chats",
+        href: "/chats",
+      },
+      {
+        icon: Settings,
+        label: "Settings",
+        href: "/settings",
+        children: [
+          {
+            icon: LayoutDashboard,
+            label: "Dashboard",
+            href: "/dashboard",
+          },
+          {
+            icon: Settings,
+            label: "App Settings",
+            href: "/settings",
+          },
+          {
+            icon: MessageSquareTextIcon,
+            label: "Responses",
+            href: "/responses",
+          },
+          {
+            icon: MonitorIcon,
+            label: "Screenshot",
+            href: "/screenshot",
+          },
+          {
+            icon: AudioLinesIcon,
+            label: "Audio",
+            href: "/audio",
+          },
+          {
+            icon: SquareSlashIcon,
+            label: "Shortcuts",
+            href: "/shortcuts",
+          },
+          {
+            icon: Code,
+            label: "Dev space",
+            href: "/dev-space",
+          },
+          {
+            icon: WandSparkles,
+            label: "System prompts",
+            href: "/system-prompts",
+          },
+        ],
+      },
+    ],
+    []
+  );
 
   const footerItems = [
     ...(hasActiveLicense

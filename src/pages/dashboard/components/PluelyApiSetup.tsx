@@ -271,7 +271,7 @@ export const PluelyApiSetup = () => {
 
   const title = isModelsLoading
     ? "Loading Models..."
-    : `Pluely supports ${models?.length} model${
+    : `PocketCrew supports ${models?.length} model${
         models?.length !== 1 ? "s" : ""
       }`;
 
@@ -279,7 +279,7 @@ export const PluelyApiSetup = () => {
     ? "Fetching the list of supported models..."
     : providerList
     ? `Access top models from providers like ${providerList}. and select smaller models for faster responses.`
-    : "Explore all the models Pluely supports.";
+    : "Explore all the models PocketCrew supports.";
 
   return (
     <div id="pluely-api" className="space-y-3 -mt-2">
@@ -455,7 +455,7 @@ export const PluelyApiSetup = () => {
                 <div className="-mt-1">
                   <p className="text-sm font-medium text-muted-foreground select-auto">
                     If you need any help or any assistance, contact
-                    support@pluely.com
+                    support@pocketcrew.com
                   </p>
                 </div>
               ) : null}
@@ -465,13 +465,13 @@ export const PluelyApiSetup = () => {
       </div>
       <div className="flex justify-between items-center">
         <Header
-          title={`${pluelyApiEnabled ? "Disable" : "Enable"} Pluely API`}
+          title={`${pluelyApiEnabled ? "Disable" : "Enable"} PocketCrew API`}
           description={
             storedLicenseKey
               ? pluelyApiEnabled
-                ? "Using all pluely APIs for audio, and chat."
+                ? "Using all PocketCrew APIs for audio, and chat."
                 : "Using all your own AI Providers for audio, and chat."
-              : "A valid license is required to enable Pluely API or you can use your own AI Providers and STT Providers."
+              : "A valid license is required to enable PocketCrew API or you can use your own AI Providers and STT Providers."
           }
         />
         <Switch

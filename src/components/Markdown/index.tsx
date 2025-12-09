@@ -2,7 +2,7 @@ import React, { Suspense } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
@@ -22,7 +22,23 @@ export function Markdown({ children }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeRaw, rehypeSanitize, rehypeKatex]}
+      rehypePlugins={[
+        rehypeRaw,
+        [
+          rehypeSanitize,
+          {
+            ...defaultSchema,
+            attributes: {
+              ...defaultSchema.attributes,
+              code: [
+                ...(defaultSchema.attributes?.code || []),
+                ["className", /^language-./],
+              ],
+            },
+          },
+        ],
+        rehypeKatex,
+      ]}
       components={COMPONENTS as any}
     >
       {fixedMarkdown}
@@ -61,28 +77,77 @@ function createResource<T>(promise: Promise<T>): Resource<T> {
   };
 }
 
+// Singleton highlighter instance
+let highlighterPromise: Promise<any> | null = null;
+
+async function getHighlighter() {
+  if (highlighterPromise) return highlighterPromise;
+
+  highlighterPromise = (async () => {
+    try {
+      const { createHighlighterCore } = await import("shiki/core");
+      const { createJavaScriptRegexEngine } = await import("shiki/engine/javascript");
+      const { bundledThemes } = await import("shiki/themes");
+
+      return await createHighlighterCore({
+        themes: [
+          await bundledThemes["github-light"](),
+          await bundledThemes["github-dark"](),
+        ],
+        langs: [], // Initialize with no languages, load on demand
+        engine: createJavaScriptRegexEngine(),
+      });
+    } catch (e) {
+      console.error("Failed to initialize highlighter:", e);
+      highlighterPromise = null; // Reset on failure
+      throw e;
+    }
+  })();
+
+  return highlighterPromise;
+}
+
 const HighlightedPre = React.memo(
   ({ children, language, ...props }: HighlightedPre) => {
     const resource = React.useMemo(
       () =>
         createResource(
           (async () => {
-            const { codeToTokens, bundledLanguages } = await import("shiki");
+            try {
+              const { bundledLanguages } = await import("shiki/langs");
+              
+              // Normalize language name to handle potential case issues
+              const normalizedLang = language.toLowerCase();
+              
+              // Find the language module in bundled languages
+              // We cast to any because keys might not perfectly match string type
+              const langModule = bundledLanguages[normalizedLang as keyof typeof bundledLanguages];
 
-            if (!(language in bundledLanguages)) {
+              // If language is not supported/bundled, return null to fallback to plain text
+              if (!langModule) {
+                 return null;
+              }
+
+              const highlighter = await getHighlighter();
+              
+              // Load the language if it hasn't been loaded yet
+              if (!highlighter.getLoadedLanguages().includes(normalizedLang)) {
+                 await highlighter.loadLanguage(await langModule());
+              }
+              
+              const { tokens } = highlighter.codeToTokens(children, {
+                lang: normalizedLang,
+                themes: {
+                  light: "github-light",
+                  dark: "github-dark",
+                },
+              });
+
+              return { tokens };
+            } catch (e) {
+              console.warn("Failed to highlight code:", e);
               return null;
             }
-
-            const { tokens } = await codeToTokens(children, {
-              lang: language as keyof typeof bundledLanguages,
-              defaultColor: false,
-              themes: {
-                light: "github-light",
-                dark: "github-dark",
-              },
-            });
-
-            return { tokens };
           })()
         ),
       [children, language]
@@ -99,19 +164,41 @@ const HighlightedPre = React.memo(
     return (
       <pre {...props}>
         <code>
-          {tokens.map((line, lineIndex) => (
+          {tokens.map((line: any, lineIndex: number) => (
             <React.Fragment key={lineIndex}>
               <span>
-                {line.map((token, tokenIndex) => {
-                  const style =
-                    typeof token.htmlStyle === "string"
-                      ? undefined
-                      : token.htmlStyle;
+                {line.map((token: any, tokenIndex: number) => {
+                  const style: any = {};
+                  
+                  if (token.variants) {
+                    const light = token.variants.light;
+                    const dark = token.variants.dark;
+                    
+                    if (light) {
+                      style["--shiki-light"] = light.color;
+                      if (light.fontStyle) {
+                        if (light.fontStyle & 1) style["--shiki-light-font-style"] = "italic";
+                        if (light.fontStyle & 2) style["--shiki-light-font-weight"] = "bold";
+                        if (light.fontStyle & 4) style["--shiki-light-text-decoration"] = "underline";
+                      }
+                    }
+                    
+                    if (dark) {
+                      style["--shiki-dark"] = dark.color;
+                      if (dark.fontStyle) {
+                        if (dark.fontStyle & 1) style["--shiki-dark-font-style"] = "italic";
+                        if (dark.fontStyle & 2) style["--shiki-dark-font-weight"] = "bold";
+                        if (dark.fontStyle & 4) style["--shiki-dark-text-decoration"] = "underline";
+                      }
+                    }
+                  } else if (token.color) {
+                    style.color = token.color;
+                  }
 
                   return (
                     <span
                       key={tokenIndex}
-                      className="text-shiki-light bg-shiki-light-bg dark:text-shiki-dark dark:bg-shiki-dark-bg"
+                      className="shiki-token"
                       style={style}
                     >
                       {token.content}
@@ -192,11 +279,11 @@ function childrenTakeAllStringContents(element: any): string {
 }
 
 const COMPONENTS = {
-  h1: withClass("h1", "text-2xl font-semibold mb-4 mt-6"),
-  h2: withClass("h2", "font-semibold text-xl mb-3 mt-5"),
-  h3: withClass("h3", "font-semibold text-lg mb-2 mt-4"),
-  h4: withClass("h4", "font-semibold text-base mb-2 mt-3"),
-  h5: withClass("h5", "font-medium mb-1 mt-2"),
+  h1: withClass("h1", "text-xl font-semibold mb-2 mt-2"),
+  h2: withClass("h2", "font-semibold text-lg mb-2 mt-2"),
+  h3: withClass("h3", "font-semibold text-base mb-1 mt-1"),
+  h4: withClass("h4", "font-semibold text-sm mb-1 mt-2"),
+  h5: withClass("h5", "font-medium mb-1 mt-1"),
   strong: withClass("strong", "font-semibold"),
   a: ({ children, href, ...props }: any) => {
     const handleClick = async (e: React.MouseEvent) => {
@@ -223,12 +310,12 @@ const COMPONENTS = {
   },
   blockquote: withClass(
     "blockquote",
-    "border-l-4 border-primary pl-4 my-4 italic"
+    "border-l-4 border-primary pl-4 my-2 italic"
   ),
   code: ({ children, className, ...rest }: any) => {
     const match = /language-(\w+)/.exec(className || "");
     return match ? (
-      <CodeBlock className={className} language={match[1]} {...rest}>
+      <CodeBlock className={className} language={match[1].toLowerCase()} {...rest}>
         {children}
       </CodeBlock>
     ) : (
@@ -243,12 +330,12 @@ const COMPONENTS = {
     );
   },
   pre: ({ children }: any) => children,
-  ol: withClass("ol", "list-decimal pl-6 my-2 space-y-1"),
-  ul: withClass("ul", "list-disc pl-6 my-2 space-y-1"),
+  ol: withClass("ol", "list-decimal pl-6 my-1 space-y-1"),
+  ul: withClass("ul", "list-disc pl-6 my-1 space-y-1"),
   li: withClass("li", "my-0 leading-tight"),
   table: withClass(
     "table",
-    "w-full border-collapse overflow-y-auto rounded-md border border-foreground/20 my-4"
+    "w-full border-collapse overflow-y-auto rounded-md border border-foreground/20 my-2"
   ),
   thead: withClass("thead", "bg-foreground/10"),
   th: withClass(
@@ -260,9 +347,9 @@ const COMPONENTS = {
     "border border-foreground/20 px-4 py-1 text-left [&[align=center]]:text-center [&[align=right]]:text-right"
   ),
   tr: withClass("tr", "m-0 border-t p-0 even:bg-muted/50"),
-  p: withClass("p", "whitespace-pre-wrap my-3"),
-  hr: withClass("hr", "border-foreground/20 my-6"),
-  img: withClass("img", "max-w-full h-auto rounded-md my-4"),
+  p: withClass("p", "whitespace-pre-wrap mb-2"),
+  hr: withClass("hr", "border-foreground/20 my-4"),
+  img: withClass("img", "max-w-full h-auto rounded-md my-2"),
   // Support for task lists
   input: ({ node, ...props }: any) => {
     if (node.properties.type === "checkbox") {

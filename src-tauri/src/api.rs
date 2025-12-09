@@ -458,7 +458,9 @@ pub async fn chat_stream_response(
     system_prompt: Option<String>,
     image_base64: Option<serde_json::Value>,
     history: Option<String>,
+    web_search_enabled: Option<bool>,
 ) -> Result<String, String> {
+    println!("[DEBUG] 🚀 chat_stream_response called with message: {}", user_message);
     // Get stored credentials to get selected model
     let (_, _, selected_model) = get_stored_credentials(&app).await?;
     let (provider, model) = selected_model.as_ref().map_or((None, None), |m| {
@@ -479,7 +481,7 @@ pub async fn chat_stream_response(
     let mut messages: Vec<serde_json::Value> = Vec::new();
 
     // Add system message if provided
-    if let Some(sys_prompt) = system_prompt {
+    if let Some(ref sys_prompt) = system_prompt {
         messages.push(serde_json::json!({
             "role": "system",
             "content": sys_prompt
@@ -487,7 +489,7 @@ pub async fn chat_stream_response(
     }
 
     // Add history if provided
-    if let Some(history_str) = history {
+    if let Some(ref history_str) = history {
         if let Ok(history_messages) = serde_json::from_str::<Vec<serde_json::Value>>(&history_str) {
             messages.extend(history_messages);
         }
@@ -503,7 +505,7 @@ pub async fn chat_stream_response(
     }));
 
     // Add image content if provided
-    if let Some(image_data) = image_base64 {
+    if let Some(ref image_data) = image_base64 {
         if image_data.is_string() {
             // Single image
             user_content.push(serde_json::json!({
@@ -536,26 +538,103 @@ pub async fn chat_stream_response(
     }));
 
     // Build request body
-    let mut request_body = serde_json::json!({
-        "model": api_config.model,
-        "messages": messages,
-        "stream": true
-    });
+    let is_openai = provider.as_deref().map(|p| p.to_lowercase()) == Some("openai".to_string());
+    let web_search_active = web_search_enabled.unwrap_or(false);
+    
+    println!("[DEBUG] 📋 Provider: {:?}, is_openai: {}, web_search_active: {}", provider, is_openai, web_search_active);
+    
+    // Use OpenAI Responses API format if provider is OpenAI (regardless of web search) OR if web search is enabled (legacy logic)
+    let use_responses_api = is_openai || web_search_active;
+    println!("[DEBUG] 🔄 use_responses_api: {}", use_responses_api);
+
+    let mut request_body = if use_responses_api {
+        // Use OpenAI Responses API format
+        let mut input_content: Vec<serde_json::Value> = Vec::new();
+        
+        // Add history to input if provided (as text context for now since Responses API input structure is different)
+        let mut full_input = String::new();
+        if let Some(history_str) = history {
+            if let Ok(history_messages) = serde_json::from_str::<Vec<serde_json::Value>>(&history_str) {
+                for msg in history_messages {
+                    if let (Some(role), Some(content)) = (msg.get("role").and_then(|r| r.as_str()), msg.get("content")) {
+                        // Handle content array or string
+                        let content_str = if let Some(s) = content.as_str() {
+                            s.to_string()
+                        } else if let Some(arr) = content.as_array() {
+                            arr.iter()
+                               .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                               .collect::<Vec<_>>()
+                               .join(" ")
+                        } else {
+                            String::new()
+                        };
+                        full_input.push_str(&format!("{}: {}\n", role, content_str));
+                    }
+                }
+            }
+        }
+        full_input.push_str(&format!("user: {}", user_message));
+
+        let mut body = serde_json::json!({
+            "model": if is_openai { "gpt-4o" } else { &api_config.model }, // Force GPT-4o for OpenAI to ensure Responses API compatibility
+            "input": full_input,
+            "instructions": system_prompt.unwrap_or_default(),
+            "stream": true
+        });
+
+        // Add web search tool ONLY if enabled
+        if web_search_active {
+            body["tools"] = serde_json::json!([
+                {"type": "web_search_preview"}
+            ]);
+        }
+        
+        body
+    } else {
+        // Standard Chat Completions API format
+        serde_json::json!({
+            "model": api_config.model,
+            "messages": messages,
+            "stream": true
+        })
+    };
+
+    // Override URL if using Responses API
+    let request_url = if use_responses_api {
+        "https://api.openai.com/v1/responses".to_string()
+    } else {
+        api_config.url.clone()
+    };
+    println!("[DEBUG] 🌐 Request URL: {}", request_url);
+    
+    if web_search_active {
+        let _ = app.emit("web_search_started", ());
+    }
 
     // Merge extra body parameters from API config
     if let Some(extra_obj) = extra_body.as_object_mut() {
         if let Some(req_obj) = request_body.as_object_mut() {
             for (key, value) in extra_obj.iter() {
-                req_obj.insert(key.clone(), value.clone());
+                // Don't overwrite essential fields
+                if key != "model" && key != "input" && key != "messages" && key != "tools" && key != "instructions" {
+                    req_obj.insert(key.clone(), value.clone());
+                }
             }
         }
     }
+
+    // Generate start timestamp for duration calculation
+    let start_time = std::time::Instant::now();
+
+    // Log the API request parameters for debugging
+    println!("[DEBUG] 🚀 Calling LLM API: {}", request_url);
+    println!("[DEBUG] 📝 Request Body: {}", serde_json::to_string_pretty(&request_body).unwrap_or_default());
 
     // Make HTTP request to the configured endpoint with streaming
     let client = reqwest::Client::new();
     let error_rules = api_config.errors.clone().unwrap_or_default();
     let response = match client
-        .post(&api_config.url)
+        .post(&request_url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_config.user_token))
         .json(&request_body)
@@ -618,9 +697,17 @@ pub async fn chat_stream_response(
     // Handle streaming response
     let mut stream = response.bytes_stream();
     let mut full_response = String::new();
+    let mut full_reasoning = String::new();
     let mut buffer = String::new();
     let mut usage: Option<serde_json::Value> = None;
     let mut stream_started = false;
+    let mut citations: Vec<serde_json::Value> = Vec::new();
+    let web_search_active = web_search_enabled.unwrap_or(false);
+    
+    // Debug counters
+    let mut chunk_count: u32 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut first_byte_time: Option<u64> = None;
 
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -654,21 +741,104 @@ pub async fn chat_stream_response(
                                         }
                                     }
                                 }
-                                if let Some(choices) =
-                                    parsed.get("choices").and_then(|c| c.as_array())
-                                {
-                                    if let Some(first_choice) = choices.first() {
-                                        if let Some(delta) = first_choice.get("delta") {
-                                            if let Some(content) =
-                                                delta.get("content").and_then(|c| c.as_str())
-                                            {
-                                                full_response.push_str(content);
-                                                // Emit just the content to frontend
-                                                let _ = app.emit("chat_stream_chunk", content);
-                                                stream_started = true;
+                                
+                                // Check for annotations (web search citations)
+                                // In Responses API, citations might come even without web search explicitly enabled (e.g. from file search or other tools)
+                                // or simply as part of the output structure.
+                                // Check in output.annotations (Responses API format)
+                                if let Some(output) = parsed.get("output") {
+                                    if let Some(annotations) = output.get("annotations").and_then(|a| a.as_array()) {
+                                        for annotation in annotations {
+                                            if !citations.iter().any(|c| c == annotation) {
+                                                citations.push(annotation.clone());
+                                                println!("[DEBUG] 🔗 Citation found: {}", serde_json::to_string(annotation).unwrap_or_default());
                                             }
                                         }
                                     }
+                                }
+                                // Also check top-level annotations
+                                if let Some(annotations) = parsed.get("annotations").and_then(|a| a.as_array()) {
+                                    for annotation in annotations {
+                                        if !citations.iter().any(|c| c == annotation) {
+                                            citations.push(annotation.clone());
+                                            println!("[DEBUG] 🔗 Citation found (top-level): {}", serde_json::to_string(annotation).unwrap_or_default());
+                                        }
+                                    }
+                                }
+                                
+                                // Handle content from both standard Chat API and Responses API
+                                let mut content: Option<String> = None;
+                                let mut reasoning: Option<String> = None;
+
+                                // 1. Try Standard Chat API (choices[0].delta)
+                                if let Some(choices) = parsed.get("choices").and_then(|c| c.as_array()) {
+                                    if let Some(first_choice) = choices.first() {
+                                        if let Some(delta) = first_choice.get("delta") {
+                                            content = delta.get("content").and_then(|c| c.as_str()).map(|s| s.to_string());
+                                            reasoning = delta.get("reasoning_content")
+                                                .or_else(|| delta.get("reasoning"))
+                                                .and_then(|c| c.as_str())
+                                                .map(|s| s.to_string());
+                                        }
+                                    }
+                                }
+                                
+                                // 2. Try Responses API (output) if content not found yet
+                                if content.is_none() {
+                                    // Responses API might return "output" as a string delta or object
+                                    if let Some(output) = parsed.get("output") {
+                                        if let Some(s) = output.as_str() {
+                                            content = Some(s.to_string());
+                                        } else if let Some(output_obj) = output.as_object() {
+                                            // Maybe output.content or output.text?
+                                            if let Some(c) = output_obj.get("content").and_then(|s| s.as_str()) {
+                                                content = Some(c.to_string());
+                                            } else if let Some(t) = output_obj.get("text").and_then(|s| s.as_str()) {
+                                                content = Some(t.to_string());
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Also check top-level "delta" which some experimental endpoints use
+                                    if content.is_none() {
+                                        if let Some(delta) = parsed.get("delta") {
+                                            if let Some(s) = delta.as_str() {
+                                                content = Some(s.to_string());
+                                            } else if let Some(obj) = delta.as_object() {
+                                                content = obj.get("content").and_then(|s| s.as_str()).map(|s| s.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if content.is_some() || reasoning.is_some() {
+                                    if let Some(ref c) = content {
+                                        full_response.push_str(c);
+                                        total_bytes += c.len() as u64;
+                                    }
+                                    if let Some(ref r) = reasoning {
+                                        full_reasoning.push_str(r);
+                                        total_bytes += r.len() as u64;
+                                    }
+                                    
+                                    chunk_count += 1;
+                                    
+                                    // Record first byte time
+                                    if first_byte_time.is_none() {
+                                        first_byte_time = Some(std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64);
+                                    }
+                                    
+                                    // Emit structured chunk containing both content and reasoning
+                                    let chunk_payload = serde_json::json!({
+                                        "content": content,
+                                        "reasoning": reasoning
+                                    });
+                                    
+                                    let _ = app.emit("chat_stream_chunk", chunk_payload);
+                                    stream_started = true;
                                 }
                             }
                         }
@@ -695,6 +865,18 @@ pub async fn chat_stream_response(
         }
     }
 
+    // Emit citations if any were collected from web search
+    if !citations.is_empty() {
+        let _ = app.emit("chat_citations", serde_json::json!(citations));
+    }
+    
+    // Calculate end time and duration
+    let end_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    
     // Emit completion event
     let _ = app.emit("chat_stream_complete", &full_response);
 

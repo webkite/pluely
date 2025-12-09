@@ -3,7 +3,8 @@ import {
   deepVariableReplacer,
   extractVariables,
   getByPath,
-  getStreamingContent,
+  getStreamingDelta,
+  StreamDelta,
 } from "./common.function";
 import { Message, TYPE_PROVIDER } from "@/types";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -46,7 +47,9 @@ async function* fetchPluelyAIResponse(params: {
   imagesBase64?: string[];
   history?: Message[];
   signal?: AbortSignal;
-}): AsyncIterable<string> {
+  deepThinkingEnabled?: boolean;
+  webSearchEnabled?: boolean;
+}): AsyncIterable<string | StreamDelta> {
   try {
     const {
       systemPrompt,
@@ -54,6 +57,8 @@ async function* fetchPluelyAIResponse(params: {
       imagesBase64 = [],
       history = [],
       signal,
+      deepThinkingEnabled,
+      webSearchEnabled,
     } = params;
 
     // Check if already aborted before starting
@@ -80,10 +85,24 @@ async function* fetchPluelyAIResponse(params: {
 
     // Set up streaming event listener
     let streamComplete = false;
-    const streamChunks: string[] = [];
+    const streamChunks: StreamDelta[] = [];
 
     const unlisten = await listen("chat_stream_chunk", (event) => {
-      const chunk = event.payload as string;
+      // The backend now emits a JSON object with content and reasoning
+      const payload = event.payload as any;
+      
+      let chunk: StreamDelta;
+      
+      if (typeof payload === "string") {
+        // Fallback for old backend behavior or simple strings
+        chunk = { content: payload, reasoning: null };
+      } else {
+        chunk = {
+          content: payload.content || null,
+          reasoning: payload.reasoning || null
+        };
+      }
+      
       streamChunks.push(chunk);
     });
 
@@ -100,12 +119,25 @@ async function* fetchPluelyAIResponse(params: {
       }
 
       // Start the streaming request using the new API response endpoint
-      await invoke("chat_stream_response", {
-        userMessage,
-        systemPrompt,
-        imageBase64,
-        history: historyString,
+      console.log("[DEBUG] 🚀 Invoking chat_stream_response with:", {
+        userMessage: userMessage.substring(0, 50) + "...",
+        hasSystemPrompt: !!systemPrompt,
+        hasImages: !!imageBase64,
+        hasHistory: !!historyString,
+        webSearchEnabled,
       });
+      try {
+        await invoke("chat_stream_response", {
+          userMessage,
+          systemPrompt,
+          imageBase64,
+          history: historyString,
+          webSearchEnabled,
+        });
+      } catch (invokeError) {
+        console.error("[DEBUG] ❌ invoke chat_stream_response failed:", invokeError);
+        throw invokeError;
+      }
 
       // Yield chunks as they come in
       let lastIndex = 0;
@@ -131,7 +163,16 @@ async function* fetchPluelyAIResponse(params: {
 
         // Yield any new chunks
         for (let i = lastIndex; i < streamChunks.length; i++) {
-          yield streamChunks[i];
+          const chunk = streamChunks[i];
+          // Apply Deep Thinking filter
+          if (chunk.content || (chunk.reasoning && deepThinkingEnabled)) {
+            if (!deepThinkingEnabled) {
+              // Should not happen if filtered, but for safety clone and nullify
+              yield { ...chunk, reasoning: null };
+            } else {
+              yield chunk;
+            }
+          }
         }
         lastIndex = streamChunks.length;
       }
@@ -145,7 +186,14 @@ async function* fetchPluelyAIResponse(params: {
 
       // Yield any remaining chunks
       for (let i = lastIndex; i < streamChunks.length; i++) {
-        yield streamChunks[i];
+        const chunk = streamChunks[i];
+        if (chunk.content || (chunk.reasoning && deepThinkingEnabled)) {
+          if (!deepThinkingEnabled) {
+            yield { ...chunk, reasoning: null };
+          } else {
+            yield chunk;
+          }
+        }
       }
     } finally {
       unlisten();
@@ -153,7 +201,7 @@ async function* fetchPluelyAIResponse(params: {
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    yield `Pluely API Error: ${errorMessage}`;
+    yield `PocketCrew API Error: ${errorMessage}`;
   }
 }
 
@@ -168,7 +216,9 @@ export async function* fetchAIResponse(params: {
   userMessage: string;
   imagesBase64?: string[];
   signal?: AbortSignal;
-}): AsyncIterable<string> {
+  deepThinkingEnabled?: boolean;
+  webSearchEnabled?: boolean;
+}): AsyncIterable<string | StreamDelta> {
   try {
     const {
       provider,
@@ -178,6 +228,8 @@ export async function* fetchAIResponse(params: {
       userMessage,
       imagesBase64 = [],
       signal,
+      deepThinkingEnabled,
+      webSearchEnabled,
     } = params;
 
     // Check if already aborted
@@ -196,6 +248,7 @@ export async function* fetchAIResponse(params: {
         imagesBase64,
         history,
         signal,
+        webSearchEnabled,
       });
       return;
     }
@@ -271,6 +324,40 @@ export async function* fetchAIResponse(params: {
     bodyObj = deepVariableReplacer(bodyObj, allVariables);
     let url = deepVariableReplacer(curlJson.url || "", allVariables);
 
+    // Special handling for OpenAI to use Responses API
+    if (provider.id === "openai") {
+      url = "https://api.openai.com/v1/responses";
+      
+      let fullInput = "";
+      if (history && history.length > 0) {
+        history.forEach((msg) => {
+          let text = "";
+          if (typeof msg.content === "string") {
+            text = msg.content;
+          } else if (Array.isArray(msg.content)) {
+            text = msg.content
+              .filter((c) => c.type === "text" && c.text)
+              .map((c) => c.text)
+              .join(" ");
+          }
+          fullInput += `${msg.role}: ${text}\n`;
+        });
+      }
+      fullInput += `user: ${userMessage}`;
+
+      bodyObj = {
+        model: bodyObj.model || "gpt-4o",
+        input: fullInput,
+        instructions: enhancedSystemPrompt || "",
+        stream: true,
+      };
+
+      if (webSearchEnabled) {
+        console.log("[DEBUG] 🌐 Web Search Enabled for OpenAI Responses API");
+        bodyObj.tools = [{ type: "web_search_preview" }];
+      }
+    }
+
     const headers = deepVariableReplacer(curlJson.header || {}, allVariables);
     headers["Content-Type"] = "application/json";
 
@@ -288,6 +375,13 @@ export async function* fetchAIResponse(params: {
     }
 
     const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
+
+    console.log("[DEBUG] 🚀 Fetching AI Response:", {
+      url,
+      method: curlJson.method || "POST",
+      headers,
+      body: curlJson.method === "GET" ? undefined : bodyObj
+    });
 
     let response;
     try {
@@ -389,11 +483,21 @@ export async function* fetchAIResponse(params: {
           if (!trimmed || trimmed === "[DONE]") continue;
           try {
             const parsed = JSON.parse(trimmed);
-            const delta = getStreamingContent(
+            console.log("[DEBUG] Custom provider raw parsed:", JSON.stringify(parsed));
+            
+            const delta = getStreamingDelta(
               parsed,
               provider?.responseContentPath || ""
             );
-            if (delta) {
+            console.log("[DEBUG] Custom provider delta:", delta);
+            if (delta.reasoning) {
+              console.log("[DEBUG] 🧠 CUSTOM PROVIDER REASONING FOUND:", delta.reasoning);
+            }
+            
+            if (delta.content || (delta.reasoning && deepThinkingEnabled)) {
+              if (!deepThinkingEnabled) {
+                delta.reasoning = null;
+              }
               yield delta;
             }
           } catch (e) {

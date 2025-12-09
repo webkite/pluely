@@ -23,11 +23,20 @@ interface AttachedFile {
   size: number;
 }
 
+interface Citation {
+  type: string;
+  text: string;
+  url: string;
+  title?: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
+  reasoning_content?: string;
+  citations?: Citation[];
 }
 
 interface ChatConversation {
@@ -73,6 +82,11 @@ export const useChatCompletion = (
   const [isRecording, setIsRecording] = useState(false);
   const [isFilesPopoverOpen, setIsFilesPopoverOpen] = useState(false);
   const [isScreenshotLoading, setIsScreenshotLoading] = useState(false);
+  const [isDeepThinkingEnabled, setIsDeepThinkingEnabled] = useState(false);
+  const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [currentCitations, setCurrentCitations] = useState<Citation[]>([]);
+  const currentCitationsRef = useRef<Citation[]>([]);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -219,8 +233,17 @@ export const useChatCompletion = (
         setTimeout(scrollToBottom, 100);
 
         let fullResponse = "";
+        let fullReasoning = "";
 
         try {
+          // Reset citations for new request
+          setCurrentCitations([]);
+          currentCitationsRef.current = [];
+          if (isWebSearchEnabled) {
+            setIsSearching(true);
+          }
+          
+          console.log("[DEBUG] 📡 Starting fetchAIResponse...");
           // Use the fetchAIResponse function with signal
           for await (const chunk of fetchAIResponse({
             provider: usePluelyAPI ? undefined : provider,
@@ -230,6 +253,8 @@ export const useChatCompletion = (
             userMessage: input,
             imagesBase64,
             signal,
+            deepThinkingEnabled: isDeepThinkingEnabled,
+            webSearchEnabled: isWebSearchEnabled,
           })) {
             // Only update if this is still the current request
             if (currentRequestIdRef.current !== requestId) {
@@ -241,13 +266,20 @@ export const useChatCompletion = (
               return; // Request was cancelled, stop processing
             }
 
-            fullResponse += chunk;
+            if (typeof chunk === "string") {
+              fullResponse += chunk;
+            } else {
+              if (chunk.content) fullResponse += chunk.content;
+              if (chunk.reasoning) fullReasoning += chunk.reasoning;
+            }
 
             // Update the last message (assistant's response) in real-time
             const assistantMsg: ChatMessage = {
               id: generateMessageId("assistant", timestamp + MESSAGE_ID_OFFSET),
               role: "assistant",
               content: fullResponse,
+              reasoning_content: fullReasoning,
+              citations: currentCitationsRef.current.length > 0 ? currentCitationsRef.current : undefined,
               timestamp: timestamp + MESSAGE_ID_OFFSET,
             };
 
@@ -301,11 +333,13 @@ export const useChatCompletion = (
         }, 100);
 
         // Save the conversation after successful completion
-        if (fullResponse) {
+        if (fullResponse || fullReasoning) {
           const assistantMsg: ChatMessage = {
             id: generateMessageId("assistant", timestamp + MESSAGE_ID_OFFSET),
             role: "assistant",
             content: fullResponse,
+            reasoning_content: fullReasoning,
+            citations: currentCitationsRef.current.length > 0 ? currentCitationsRef.current : undefined,
             timestamp: timestamp + MESSAGE_ID_OFFSET,
           };
 
@@ -379,6 +413,8 @@ export const useChatCompletion = (
       messages,
       conversationId,
       setMessages,
+      isDeepThinkingEnabled,
+      isWebSearchEnabled,
     ]
   );
 
@@ -563,7 +599,7 @@ export const useChatCompletion = (
             setState((prev) => ({
               ...prev,
               error:
-                "Screen Recording permission required. Please enable it by going to System Settings > Privacy & Security > Screen & System Audio Recording. If you don't see Pluely in the list, click the '+' button to add it. If it's already listed, make sure it's enabled. Then restart the app.",
+                "Screen Recording permission required. Please enable it by going to System Settings > Privacy & Security > Screen & System Audio Recording. If you don't see PocketCrew in the list, click the '+' button to add it. If it's already listed, make sure it's enabled. Then restart the app.",
             }));
             setIsScreenshotLoading(false);
             screenshotInitiatedByThisContext.current = false;
@@ -673,6 +709,41 @@ export const useChatCompletion = (
     };
   }, []);
 
+  // Listen for web search and API debug events
+  useEffect(() => {
+    let unlistenSearchStarted: (() => void) | undefined;
+    let unlistenCitations: (() => void) | undefined;
+    
+    console.log("[DEBUG] Setting up Web Search event listeners...");
+    
+    const setupListeners = async () => {
+      unlistenSearchStarted = await listen("web_search_started", () => {
+        setIsSearching(true);
+      });
+      
+      unlistenCitations = await listen<Citation[]>("chat_citations", (event) => {
+        const citations = event.payload || [];
+        setCurrentCitations(citations);
+        currentCitationsRef.current = citations;
+        setIsSearching(false);
+      });
+    };
+    
+    setupListeners();
+    
+    return () => {
+      unlistenSearchStarted?.();
+      unlistenCitations?.();
+    };
+  }, []);
+  
+  // Reset searching state when loading completes
+  useEffect(() => {
+    if (!state.isLoading) {
+      setIsSearching(false);
+    }
+  }, [state.isLoading]);
+
   // Cleanup abort controller on unmount
   useEffect(() => {
     return () => {
@@ -717,5 +788,11 @@ export const useChatCompletion = (
     allSttProviders,
     selectedAudioDevices,
     hasActiveLicense,
+    isDeepThinkingEnabled,
+    setIsDeepThinkingEnabled,
+    isWebSearchEnabled,
+    setIsWebSearchEnabled,
+    isSearching,
+    currentCitations,
   };
 };

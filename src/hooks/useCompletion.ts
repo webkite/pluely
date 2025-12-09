@@ -32,6 +32,7 @@ interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
+  reasoning_content?: string;
 }
 
 interface ChatConversation {
@@ -209,32 +210,41 @@ export const useCompletion = () => {
         }));
 
         try {
-          // Use the fetchAIResponse function with signal
-          for await (const chunk of fetchAIResponse({
-            provider: usePluelyAPI ? undefined : provider,
-            selectedProvider: selectedAIProvider,
-            systemPrompt: systemPrompt || undefined,
-            history: messageHistory,
-            userMessage: input,
-            imagesBase64,
-            signal,
-          })) {
-            // Only update if this is still the current request
-            if (currentRequestIdRef.current !== requestId) {
-              return; // Request was superseded, stop processing
-            }
+            // Use the fetchAIResponse function with signal
+            for await (const chunk of fetchAIResponse({
+              provider: usePluelyAPI ? undefined : provider,
+              selectedProvider: selectedAIProvider,
+              systemPrompt: systemPrompt || undefined,
+              history: messageHistory,
+              userMessage: input,
+              imagesBase64,
+              signal,
+            })) {
+              // Only update if this is still the current request
+              if (currentRequestIdRef.current !== requestId) {
+                return; // Request was superseded, stop processing
+              }
 
-            // Check if request was aborted
-            if (signal.aborted) {
-              return; // Request was cancelled, stop processing
-            }
+              // Check if request was aborted
+              if (signal.aborted) {
+                return; // Request was cancelled, stop processing
+              }
 
-            fullResponse += chunk;
-            setState((prev) => ({
-              ...prev,
-              response: prev.response + chunk,
-            }));
-          }
+              let contentToAdd = "";
+              if (typeof chunk === "string") {
+                contentToAdd = chunk;
+              } else if (chunk.content) {
+                contentToAdd = chunk.content;
+              }
+
+              if (contentToAdd) {
+                fullResponse += contentToAdd;
+                setState((prev) => ({
+                  ...prev,
+                  response: prev.response + contentToAdd,
+                }));
+              }
+            }
         } catch (e: any) {
           // Only show error if this is still the current request and not aborted
           if (currentRequestIdRef.current === requestId && !signal.aborted) {
@@ -627,11 +637,20 @@ export const useCompletion = () => {
                 return; // Request was superseded or cancelled
               }
 
-              fullResponse += chunk;
-              setState((prev) => ({
-                ...prev,
-                response: prev.response + chunk,
-              }));
+              let contentToAdd = "";
+              if (typeof chunk === "string") {
+                contentToAdd = chunk;
+              } else if (chunk.content) {
+                contentToAdd = chunk.content;
+              }
+
+              if (contentToAdd) {
+                fullResponse += contentToAdd;
+                setState((prev) => ({
+                  ...prev,
+                  response: prev.response + contentToAdd,
+                }));
+              }
             }
 
             // Only proceed if this is still the current request
@@ -876,7 +895,7 @@ export const useCompletion = () => {
             setState((prev) => ({
               ...prev,
               error:
-                "Screen Recording permission required. Please enable it by going to System Settings > Privacy & Security > Screen & System Audio Recording. If you don't see Pluely in the list, click the '+' button to add it. If it's already listed, make sure it's enabled. Then restart the app.",
+                "Screen Recording permission required. Please enable it by going to System Settings > Privacy & Security > Screen & System Audio Recording. If you don't see PocketCrew in the list, click the '+' button to add it. If it's already listed, make sure it's enabled. Then restart the app.",
             }));
             setIsScreenshotLoading(false);
             screenshotInitiatedByThisContext.current = false;

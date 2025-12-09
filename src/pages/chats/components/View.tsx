@@ -6,28 +6,26 @@ import {
   Markdown,
   Textarea,
   GetLicense,
+  Switch,
 } from "@/components";
 import { getConversationById } from "@/lib";
-import { ChatConversation } from "@/types";
+import { ChatConversation, RouterState } from "@/types";
 import {
-  Download,
   MessageCircleIcon,
-  MessageCircleReplyIcon,
-  Trash2,
   SparklesIcon,
   UserIcon,
   SendIcon,
-  Check,
   Loader2,
+  Brain,
+  Globe,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import moment from "moment";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useLocation } from "react-router-dom";
 import { PageLayout } from "@/layouts";
-import { useHistory, useChatCompletion } from "@/hooks";
+import { useChatCompletion } from "@/hooks";
 import { useApp } from "@/contexts";
 import {
-  DeleteConfirmationDialog,
   ChatAudio,
   ChatScreenshot,
   ChatFiles,
@@ -36,26 +34,51 @@ import {
 
 const View = () => {
   const { conversationId } = useParams();
+  const location = useLocation(); // Import useLocation from react-router-dom
   const { hasActiveLicense } = useApp();
-  const navigate = useNavigate();
   const [messages, setMessages] = useState<ChatConversation | null>(null);
-
-  const {
-    handleDeleteConfirm,
-    confirmDelete,
-    cancelDelete,
-    deleteConfirm,
-    handleAttachToOverlay,
-    handleDownload,
-    isDownloaded,
-    isAttached,
-  } = useHistory();
+  const hasAutoSubmittedRef = useRef(false); // Import useRef
 
   const completion = useChatCompletion(
     conversationId as string,
     messages,
     setMessages
   );
+
+  // Handle auto-submit from navigation state (e.g. from Home page)
+  useEffect(() => {
+    const state = location.state as RouterState | null;
+    
+    if (
+      (state?.initialInput || state?.initialFiles?.length) && 
+      !hasAutoSubmittedRef.current && 
+      !completion.isLoading && 
+      !messages?.messages.length
+    ) {
+      hasAutoSubmittedRef.current = true;
+      
+      // Initialize with files if present
+      if (state.initialFiles?.length) {
+        completion.setState(prev => ({
+          ...prev,
+          attachedFiles: state.initialFiles || []
+        }));
+      }
+
+      // Submit with input text if present, or just set files and wait if no text
+      // But usually we want to submit if there is input OR files + auto-submit intent
+      // Here we assume if we navigated here with state, we want to submit
+      if (state.initialInput) {
+        // Small delay to ensure state update for files has processed if needed
+        setTimeout(() => {
+          completion.submit(state.initialInput);
+        }, 100);
+      }
+      
+      // Clear the state so refreshing doesn't re-submit
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, completion.submit, completion.isLoading, messages, completion.setState]);
 
   useEffect(() => {
     const getMessages = async () => {
@@ -76,10 +99,6 @@ const View = () => {
     }
   }, [messages?.messages.length]);
 
-  const handleDelete = async () => {
-    await confirmDelete();
-    navigate(-1);
-  };
 
   return (
     <PageLayout
@@ -87,59 +106,6 @@ const View = () => {
       allowBackButton={true}
       title={messages?.title || ""}
       description={`${messages?.messages.length} messages in this conversation`}
-      rightSlot={
-        <div className="flex flex-row items-center gap-2">
-          <Button
-            variant="outline"
-            title="Open this conversation in overlay"
-            className="text-[10px] lg:text-sm h-6 lg:h-8"
-            onClick={() =>
-              conversationId && handleAttachToOverlay(conversationId)
-            }
-            disabled={isAttached}
-          >
-            {isAttached ? (
-              <>
-                <Check className="size-3 lg:size-4 text-green-600" />
-                Attached
-              </>
-            ) : (
-              <>
-                Open in Overlay{" "}
-                <MessageCircleReplyIcon className="size-3 lg:size-4" />
-              </>
-            )}
-          </Button>
-          <Button
-            variant={"outline"}
-            title="Download conversation as markdown"
-            className="text-[10px] lg:text-sm h-6 lg:h-8"
-            onClick={(e) => handleDownload(messages, e)}
-            disabled={isDownloaded}
-          >
-            {isDownloaded ? (
-              <>
-                <Check className="size-3 lg:size-4 text-green-600" />
-                Downloaded
-              </>
-            ) : (
-              <>
-                Download <Download className="size-3 lg:size-4" />
-              </>
-            )}
-          </Button>
-          <Button
-            variant="destructive"
-            title="Delete conversation"
-            onClick={() =>
-              conversationId && handleDeleteConfirm(conversationId)
-            }
-            className="text-[10px] lg:text-sm h-6 lg:h-8"
-          >
-            Delete <Trash2 className="size-3 lg:size-4" />
-          </Button>
-        </div>
-      }
     >
       {messages?.messages.length === 0 ? (
         <Empty
@@ -190,15 +156,71 @@ const View = () => {
                       isUser ? "items-end" : "items-start"
                     }`}
                   >
-                    <Card
-                      className={`px-4 text-xs lg:text-sm py-0 transition-all select-none shadow-none ${
-                        isUser
-                          ? "!bg-primary text-primary-foreground !border-primary rounded-tr-sm"
-                          : "!bg-muted/50 dark:!bg-muted/30 rounded-tl-sm"
-                      }`}
-                    >
-                      <Markdown>{message.content}</Markdown>
-                    </Card>
+                    {!isUser && message.reasoning_content && (
+                      <div className="mb-2 pl-4 border-l-2 border-primary/30 text-xs text-muted-foreground w-full">
+                        <div className="flex items-center gap-2 mb-1 font-semibold opacity-70 select-none">
+                          <Brain className={`size-3 ${
+                            completion.isLoading && 
+                            index === array.length - 1 && 
+                            !message.content 
+                              ? "animate-pulse" 
+                              : ""
+                          }`} />
+                          <span>Thinking Process</span>
+                          {completion.isLoading && 
+                            index === array.length - 1 && 
+                            !message.content && (
+                            <span className="animate-pulse">...</span>
+                          )}
+                        </div>
+                        <div className="italic">
+                          <Markdown>{message.reasoning_content}</Markdown>
+                          {completion.isLoading && 
+                            index === array.length - 1 && 
+                            !message.content && (
+                            <span className="inline-block w-1.5 h-3 bg-primary/50 animate-pulse ml-0.5" />
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {message.content && (
+                      <Card
+                        className={`px-4 text-xs lg:text-sm py-2 transition-all select-none shadow-none [&_p:last-child]:mb-0 ${
+                          isUser
+                            ? "!bg-primary text-primary-foreground !border-primary rounded-tr-sm"
+                            : "!bg-muted/50 dark:!bg-muted/30 rounded-tl-sm"
+                        }`}
+                      >
+                        <Markdown>{message.content}</Markdown>
+                      </Card>
+                    )}
+                    
+                    {/* Citations - show if available */}
+                    {!isUser && (message.citations?.length || (index === array.length - 1 && completion.currentCitations.length > 0)) ? (
+                      <div className="mt-2 p-2 bg-muted/30 rounded-md border border-muted/50 text-xs">
+                        <div className="flex items-center gap-1 mb-1 text-muted-foreground font-medium">
+                          <Globe className="size-3" />
+                          <span>Sources</span>
+                        </div>
+                        <div className="space-y-1">
+                          {(message.citations || completion.currentCitations).map((citation, citationIndex) => (
+                            <div key={citationIndex} className="flex items-start gap-1">
+                              <span className="text-muted-foreground">[{citationIndex + 1}]</span>
+                              <a 
+                                href={citation.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:underline truncate max-w-[250px]"
+                                title={citation.url}
+                              >
+                                {citation.title || citation.url}
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    
                     <Badge
                       variant="outline"
                       className={`text-[10px] lg:text-xs bg-transparent border-none ${
@@ -221,6 +243,54 @@ const View = () => {
               </div>
             );
           })}
+          
+          {/* Web Search Indicator */}
+          {completion.isSearching && (
+            <div className="flex gap-3 justify-start px-2 mb-4 animate-in fade-in slide-in-from-bottom-2">
+              <div className="flex-shrink-0">
+                <div className="size-7 lg:size-8 rounded-full bg-blue-500/10 flex items-center justify-center">
+                  <Globe className="size-3 lg:size-4 text-blue-500 animate-pulse" />
+                </div>
+              </div>
+              <div className="flex items-center">
+                <span className="text-xs text-muted-foreground animate-pulse font-medium">
+                  Searching the web...
+                </span>
+              </div>
+            </div>
+          )}
+          
+          {/* Waiting Animation for Deep Thinking - shown while streaming reasoning */}
+          {completion.isLoading &&
+            completion.isDeepThinkingEnabled && (() => {
+              const lastMessage = messages?.messages[messages.messages.length - 1];
+              // Show thinking indicator if:
+              // 1. Last message is from user (waiting for response)
+              // 2. Or assistant message has reasoning but no content yet (still thinking)
+              const isWaitingForResponse = lastMessage?.role === "user";
+              const isThinking = lastMessage?.role === "assistant" && 
+                lastMessage?.reasoning_content && 
+                !lastMessage?.content;
+              
+              if (isWaitingForResponse || isThinking) {
+                return (
+                  <div className="flex gap-3 justify-start px-2 mb-4 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex-shrink-0">
+                      <div className="size-7 lg:size-8 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Brain className="size-3 lg:size-4 text-primary animate-pulse" />
+                      </div>
+                    </div>
+                    <div className="flex items-center">
+                      <span className="text-xs text-muted-foreground animate-pulse font-medium">
+                        {isThinking ? "Deep thinking..." : "Thinking..."}
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            
           <div ref={completion.messagesEndRef} />
         </div>
       )}
@@ -287,6 +357,42 @@ const View = () => {
                     isScreenshotLoading={completion.isScreenshotLoading}
                     disabled={!hasActiveLicense}
                   />
+                  
+                  {/* Deep Thinking Toggle */}
+                  <div className="flex items-center gap-1 ml-1 bg-muted/20 p-1 rounded-md border border-white/5 h-9">
+                    <Switch
+                      checked={completion.isDeepThinkingEnabled}
+                      onCheckedChange={completion.setIsDeepThinkingEnabled}
+                      className="scale-75 origin-center"
+                      title="Enable Deep Thinking"
+                      disabled={completion.isLoading}
+                    />
+                    <Brain
+                      className={`size-3 lg:size-4 ${
+                        completion.isDeepThinkingEnabled
+                          ? "text-primary"
+                          : "text-muted-foreground"
+                      }`}
+                    />
+                  </div>
+                  
+                  {/* Web Search Toggle */}
+                  <div className="flex items-center gap-1 ml-1 bg-muted/20 p-1 rounded-md border border-white/5 h-9">
+                    <Switch
+                      checked={completion.isWebSearchEnabled}
+                      onCheckedChange={completion.setIsWebSearchEnabled}
+                      className="scale-75 origin-center"
+                      title="Enable Web Search"
+                      disabled={completion.isLoading}
+                    />
+                    <Globe
+                      className={`size-3 lg:size-4 ${
+                        completion.isWebSearchEnabled
+                          ? "text-blue-500"
+                          : "text-muted-foreground"
+                      }`}
+                    />
+                  </div>
                 </div>
 
                 <Textarea
@@ -323,12 +429,6 @@ const View = () => {
         </div>
       </div>
 
-      {/* Delete Confirmation Dialog */}
-      <DeleteConfirmationDialog
-        deleteConfirm={deleteConfirm}
-        cancelDelete={cancelDelete}
-        confirmDelete={handleDelete}
-      />
     </PageLayout>
   );
 };

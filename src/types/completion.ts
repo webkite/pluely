@@ -7,12 +7,21 @@ export interface AttachedFile {
   size: number;
 }
 
+export interface Citation {
+  type: string;
+  text: string;
+  url: string;
+  title?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
   attachedFiles?: AttachedFile[];
+  reasoning_content?: string;
+  citations?: Citation[];
 }
 
 export interface ChatConversation {

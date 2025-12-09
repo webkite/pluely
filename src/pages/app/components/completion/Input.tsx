@@ -90,10 +90,10 @@ export const Input = ({
         <PopoverContent
           align="end"
           side="bottom"
-          className="w-screen p-0 border shadow-lg overflow-hidden"
+          className="dark w-screen p-0 border shadow-lg overflow-hidden bg-black/90 border-white/10"
           sideOffset={8}
         >
-          <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
+          <div className="flex items-center justify-between px-4 py-2 border-b bg-black/50 border-white/10">
             <div className="flex flex-row gap-1 items-center">
               <h3 className="font-semibold text-xs select-none">
                 {keepEngaged ? "Conversation Mode" : "AI Response"}

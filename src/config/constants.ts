@@ -27,7 +27,7 @@ export const MAX_FILES = 6;
 
 // Default settings
 export const DEFAULT_SYSTEM_PROMPT =
-  "You are a helpful AI assistant. Be concise, accurate, and friendly in your responses";
+  "You are a helpful AI assistant. Be concise, accurate, and friendly in your responses. Use Markdown formatting for your responses.";
 
 export const DEFAULT_QUICK_ACTIONS = [
   "What should I say?",

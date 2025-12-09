@@ -114,7 +114,7 @@ export const SystemAudio = (props: useSystemAudioType) => {
         <PopoverContent
           align="end"
           side="bottom"
-          className="select-none w-screen p-0 border overflow-hidden border-input/50"
+          className="dark select-none w-screen p-0 border overflow-hidden bg-black/90 border-white/10"
           sideOffset={8}
         >
           <ScrollArea className="h-[calc(100vh-4rem)]" ref={scrollAreaRef}>

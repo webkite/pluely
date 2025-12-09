@@ -214,6 +214,9 @@ export function getStreamingContent(
     "candidates[0].content.parts[0].text", // Gemini
     "delta.text", // Claude
     "text", // Cohere
+    "output", // OpenAI Responses API (string)
+    "output.content", // OpenAI Responses API (object)
+    "output.text", // OpenAI Responses API (object)
     // 3. Finally, use the original path as a fallback (for Gemini and others).
     defaultPath,
   ]);
@@ -233,4 +236,35 @@ export function getStreamingContent(
 
   // Return null if no content is found after trying all paths.
   return null;
+}
+
+export interface StreamDelta {
+  content: string | null;
+  reasoning: string | null;
+}
+
+export function getStreamingDelta(
+  chunk: any,
+  defaultPath: string
+): StreamDelta {
+  const content = getStreamingContent(chunk, defaultPath);
+
+  // Check for reasoning content
+  const reasoningPaths = [
+    "choices[0].delta.reasoning_content", // DeepSeek R1
+    "choices[0].delta.reasoning",
+    "reasoning_content",
+    "reasoning",
+  ];
+
+  let reasoning: string | null = null;
+  for (const path of reasoningPaths) {
+    const r = getByPath(chunk, path);
+    if (typeof r === "string" && r) {
+      reasoning = r;
+      break;
+    }
+  }
+
+  return { content, reasoning };
 }
