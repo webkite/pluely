@@ -347,7 +347,7 @@ const COMPONENTS = {
     "border border-foreground/20 px-4 py-1 text-left [&[align=center]]:text-center [&[align=right]]:text-right"
   ),
   tr: withClass("tr", "m-0 border-t p-0 even:bg-muted/50"),
-  p: withClass("p", "whitespace-pre-wrap mb-2"),
+  p: withClass("p", "mb-2"),
   hr: withClass("hr", "border-foreground/20 my-4"),
   img: withClass("img", "max-w-full h-auto rounded-md my-2"),
   // Support for task lists

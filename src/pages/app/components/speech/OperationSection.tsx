@@ -68,14 +68,14 @@ export const OperationSection = ({
                   <p className="text-xs italic">Generating response...</p>
                 </div>
               ) : (
-                <p className="text-md leading-relaxed whitespace-pre-wrap">
+                <div className="text-md leading-relaxed">
                   {lastAIResponse ? (
                     <Markdown>{lastAIResponse}</Markdown>
                   ) : null}
                   {isAIProcessing && (
                     <span className="inline-block w-2 h-4 animate-pulse ml-1" />
                   )}
-                </p>
+                </div>
               )}
             </Card>
           </div>
@@ -133,9 +133,9 @@ export const OperationSection = ({
                         </div>
                       </div>
                       <Card className="p-3 bg-transparent">
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                        <div className="text-sm leading-relaxed">
                           <Markdown>{message.content}</Markdown>
-                        </p>
+                        </div>
                       </Card>
                     </div>
                   ))}
