@@ -549,8 +549,6 @@ pub async fn chat_stream_response(
 
     let mut request_body = if use_responses_api {
         // Use OpenAI Responses API format
-        let mut input_content: Vec<serde_json::Value> = Vec::new();
-        
         // Add history to input if provided (as text context for now since Responses API input structure is different)
         let mut full_input = String::new();
         if let Some(history_str) = history {
@@ -702,11 +700,10 @@ pub async fn chat_stream_response(
     let mut usage: Option<serde_json::Value> = None;
     let mut stream_started = false;
     let mut citations: Vec<serde_json::Value> = Vec::new();
-    let web_search_active = web_search_enabled.unwrap_or(false);
     
-    // Debug counters
-    let mut chunk_count: u32 = 0;
-    let mut total_bytes: u64 = 0;
+    // Debug counters (prefixed with _ to suppress unused warnings)
+    let mut _chunk_count: u32 = 0;
+    let mut _total_bytes: u64 = 0;
     let mut first_byte_time: Option<u64> = None;
 
     while let Some(chunk) = stream.next().await {
@@ -770,42 +767,83 @@ pub async fn chat_stream_response(
                                 let mut content: Option<String> = None;
                                 let mut reasoning: Option<String> = None;
 
-                                // 1. Try Standard Chat API (choices[0].delta)
-                                if let Some(choices) = parsed.get("choices").and_then(|c| c.as_array()) {
-                                    if let Some(first_choice) = choices.first() {
-                                        if let Some(delta) = first_choice.get("delta") {
-                                            content = delta.get("content").and_then(|c| c.as_str()).map(|s| s.to_string());
-                                            reasoning = delta.get("reasoning_content")
-                                                .or_else(|| delta.get("reasoning"))
-                                                .and_then(|c| c.as_str())
-                                                .map(|s| s.to_string());
+                                // Get event type for Responses API
+                                let event_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                                
+                                // 1. Handle OpenAI Responses API streaming events (semantic events)
+                                // Key event types:
+                                // - response.output_text.delta: Contains text delta in "delta" field
+                                // - response.reasoning_summary_text.delta: Contains reasoning delta
+                                // - response.output_text.done: Text output complete
+                                // - response.completed: Full response complete
+                                match event_type {
+                                    "response.output_text.delta" => {
+                                        // Responses API: text content delta
+                                        if let Some(delta_text) = parsed.get("delta").and_then(|d| d.as_str()) {
+                                            content = Some(delta_text.to_string());
                                         }
                                     }
-                                }
-                                
-                                // 2. Try Responses API (output) if content not found yet
-                                if content.is_none() {
-                                    // Responses API might return "output" as a string delta or object
-                                    if let Some(output) = parsed.get("output") {
-                                        if let Some(s) = output.as_str() {
-                                            content = Some(s.to_string());
-                                        } else if let Some(output_obj) = output.as_object() {
-                                            // Maybe output.content or output.text?
-                                            if let Some(c) = output_obj.get("content").and_then(|s| s.as_str()) {
-                                                content = Some(c.to_string());
-                                            } else if let Some(t) = output_obj.get("text").and_then(|s| s.as_str()) {
-                                                content = Some(t.to_string());
+                                    "response.reasoning_summary_text.delta" => {
+                                        // Responses API: reasoning content delta (for models like o1, o3)
+                                        if let Some(delta_text) = parsed.get("delta").and_then(|d| d.as_str()) {
+                                            reasoning = Some(delta_text.to_string());
+                                        }
+                                    }
+                                    "response.output_item.done" => {
+                                        // Check for annotations in completed output items
+                                        if let Some(item) = parsed.get("item") {
+                                            if let Some(item_content) = item.get("content").and_then(|c| c.as_array()) {
+                                                for content_part in item_content {
+                                                    if let Some(annots) = content_part.get("annotations").and_then(|a| a.as_array()) {
+                                                        for annotation in annots {
+                                                            if !citations.iter().any(|c| c == annotation) {
+                                                                citations.push(annotation.clone());
+                                                                println!("[DEBUG] 🔗 Citation found (item): {}", serde_json::to_string(annotation).unwrap_or_default());
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
-                                    
-                                    // Also check top-level "delta" which some experimental endpoints use
-                                    if content.is_none() {
-                                        if let Some(delta) = parsed.get("delta") {
-                                            if let Some(s) = delta.as_str() {
-                                                content = Some(s.to_string());
-                                            } else if let Some(obj) = delta.as_object() {
-                                                content = obj.get("content").and_then(|s| s.as_str()).map(|s| s.to_string());
+                                    _ => {
+                                        // 2. Fallback: Try Standard Chat Completions API format (choices[0].delta)
+                                        if let Some(choices) = parsed.get("choices").and_then(|c| c.as_array()) {
+                                            if let Some(first_choice) = choices.first() {
+                                                if let Some(delta) = first_choice.get("delta") {
+                                                    content = delta.get("content").and_then(|c| c.as_str()).map(|s| s.to_string());
+                                                    reasoning = delta.get("reasoning_content")
+                                                        .or_else(|| delta.get("reasoning"))
+                                                        .and_then(|c| c.as_str())
+                                                        .map(|s| s.to_string());
+                                                }
+                                            }
+                                        }
+                                        
+                                        // 3. Legacy fallback: Try other possible formats
+                                        if content.is_none() {
+                                            // Try "output" field
+                                            if let Some(output) = parsed.get("output") {
+                                                if let Some(s) = output.as_str() {
+                                                    content = Some(s.to_string());
+                                                } else if let Some(output_obj) = output.as_object() {
+                                                    if let Some(c) = output_obj.get("content").and_then(|s| s.as_str()) {
+                                                        content = Some(c.to_string());
+                                                    } else if let Some(t) = output_obj.get("text").and_then(|s| s.as_str()) {
+                                                        content = Some(t.to_string());
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Try top-level "delta" field
+                                            if content.is_none() {
+                                                if let Some(delta) = parsed.get("delta") {
+                                                    if let Some(s) = delta.as_str() {
+                                                        content = Some(s.to_string());
+                                                    } else if let Some(obj) = delta.as_object() {
+                                                        content = obj.get("content").and_then(|s| s.as_str()).map(|s| s.to_string());
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -813,15 +851,39 @@ pub async fn chat_stream_response(
 
                                 if content.is_some() || reasoning.is_some() {
                                     if let Some(ref c) = content {
-                                        full_response.push_str(c);
-                                        total_bytes += c.len() as u64;
+                                        // Check if the content is actually the full response (starts with previous full response)
+                                        // This handles providers that send full text instead of deltas
+                                        let delta = if !full_response.is_empty() && c.starts_with(full_response.as_str()) {
+                                            if c.len() > full_response.len() {
+                                                c[full_response.len()..].to_string()
+                                            } else {
+                                                // No new content
+                                                String::new()
+                                            }
+                                        } else {
+                                            c.clone()
+                                        };
+
+                                        if !delta.is_empty() {
+                                            full_response.push_str(&delta);
+                                            _total_bytes += delta.len() as u64;
+                                            // Update content to be just the delta
+                                            content = Some(delta);
+                                        } else {
+                                            content = None;
+                                        }
                                     }
                                     if let Some(ref r) = reasoning {
                                         full_reasoning.push_str(r);
-                                        total_bytes += r.len() as u64;
+                                        _total_bytes += r.len() as u64;
                                     }
                                     
-                                    chunk_count += 1;
+                                    // If both became None/Empty after processing, skip emission
+                                    if content.is_none() && reasoning.is_none() {
+                                        continue;
+                                    }
+                                    
+                                    _chunk_count += 1;
                                     
                                     // Record first byte time
                                     if first_byte_time.is_none() {
@@ -829,6 +891,14 @@ pub async fn chat_stream_response(
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap_or_default()
                                             .as_millis() as u64);
+                                    }
+                                    
+                                    // Debug: log the actual content being emitted
+                                    if let Some(ref c) = content {
+                                        println!("[DEBUG] 📝 Emitting content chunk: {:?} (len={})", c, c.len());
+                                    }
+                                    if let Some(ref r) = reasoning {
+                                        println!("[DEBUG] 🧠 Emitting reasoning chunk: {:?}", r);
                                     }
                                     
                                     // Emit structured chunk containing both content and reasoning

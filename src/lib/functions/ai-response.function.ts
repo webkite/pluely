@@ -440,6 +440,7 @@ export async function* fetchAIResponse(params: {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let accumulatedResponse = "";
 
     while (true) {
       // Check if aborted
@@ -489,6 +490,22 @@ export async function* fetchAIResponse(params: {
               parsed,
               provider?.responseContentPath || ""
             );
+
+            // Handle full text vs delta (prevent duplication)
+            if (delta.content) {
+              if (accumulatedResponse && delta.content.startsWith(accumulatedResponse)) {
+                if (delta.content.length > accumulatedResponse.length) {
+                  delta.content = delta.content.slice(accumulatedResponse.length);
+                } else {
+                  delta.content = null;
+                }
+              }
+              
+              if (delta.content) {
+                accumulatedResponse += delta.content;
+              }
+            }
+
             console.log("[DEBUG] Custom provider delta:", delta);
             if (delta.reasoning) {
               console.log("[DEBUG] 🧠 CUSTOM PROVIDER REASONING FOUND:", delta.reasoning);

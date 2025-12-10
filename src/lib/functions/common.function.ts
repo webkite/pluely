@@ -196,6 +196,14 @@ export function deepVariableReplacer(
 /**
  * Extracts content from a streaming API response chunk by trying a series of common JSON paths.
  * This makes the system more resilient to variations in streaming formats.
+ * 
+ * Supports:
+ * - OpenAI Chat Completions API: choices[0].delta.content
+ * - OpenAI Responses API: type="response.output_text.delta", delta field
+ * - Gemini: candidates[0].content.parts[0].text
+ * - Claude: delta.text
+ * - Cohere: text
+ * 
  * @param chunk The parsed JSON object from a stream line.
  * @param defaultPath The default, non-streaming content path for the provider.
  * @returns The extracted text content, or null if not found.
@@ -204,6 +212,18 @@ export function getStreamingContent(
   chunk: any,
   defaultPath: string
 ): string | null {
+  // Check for OpenAI Responses API semantic events first
+  // The Responses API uses "type" field to identify event types
+  const eventType = chunk?.type;
+  
+  if (eventType === "response.output_text.delta") {
+    // OpenAI Responses API: text content is in "delta" field directly
+    const delta = chunk?.delta;
+    if (typeof delta === "string" && delta) {
+      return delta;
+    }
+  }
+  
   // A set of possible paths to check for streaming content.
   // Using a Set automatically handles duplicates.
   const possiblePaths = new Set([
@@ -217,6 +237,7 @@ export function getStreamingContent(
     "output", // OpenAI Responses API (string)
     "output.content", // OpenAI Responses API (object)
     "output.text", // OpenAI Responses API (object)
+    "delta", // Generic delta field
     // 3. Finally, use the original path as a fallback (for Gemini and others).
     defaultPath,
   ]);
@@ -243,10 +264,44 @@ export interface StreamDelta {
   reasoning: string | null;
 }
 
+/**
+ * Extracts both content and reasoning from streaming response chunks.
+ * 
+ * Supports:
+ * - OpenAI Chat Completions API: choices[0].delta.content, choices[0].delta.reasoning_content
+ * - OpenAI Responses API: type="response.output_text.delta" for content,
+ *                         type="response.reasoning_summary_text.delta" for reasoning
+ * - DeepSeek R1: choices[0].delta.reasoning_content
+ * 
+ * @param chunk The parsed JSON object from a stream line.
+ * @param defaultPath The default, non-streaming content path for the provider.
+ * @returns StreamDelta with content and reasoning fields.
+ */
 export function getStreamingDelta(
   chunk: any,
   defaultPath: string
 ): StreamDelta {
+  // Check for OpenAI Responses API semantic events first
+  const eventType = chunk?.type;
+  
+  // Handle Responses API events
+  if (eventType === "response.output_text.delta") {
+    // Text content delta
+    const delta = chunk?.delta;
+    if (typeof delta === "string") {
+      return { content: delta, reasoning: null };
+    }
+  }
+  
+  if (eventType === "response.reasoning_summary_text.delta") {
+    // Reasoning content delta (for o1, o3 models)
+    const delta = chunk?.delta;
+    if (typeof delta === "string") {
+      return { content: null, reasoning: delta };
+    }
+  }
+  
+  // Fall back to standard content extraction
   const content = getStreamingContent(chunk, defaultPath);
 
   // Check for reasoning content
