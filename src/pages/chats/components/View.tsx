@@ -191,7 +191,7 @@ const View = () => {
                             : "!bg-muted/50 dark:!bg-muted/30 rounded-tl-sm"
                         }`}
                       >
-                        <Markdown>{message.content}</Markdown>
+                        <Markdown className={isUser ? "prose-headings:text-primary-foreground prose-p:text-primary-foreground prose-strong:text-primary-foreground prose-li:text-primary-foreground prose-ol:text-primary-foreground prose-ul:text-primary-foreground prose-code:text-primary-foreground" : ""}>{message.content}</Markdown>
                       </Card>
                     )}
                     

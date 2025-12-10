@@ -1,6 +1,7 @@
 import React, { Suspense } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkMath from "remark-math";
@@ -12,37 +13,40 @@ import { CopyButton } from "./copy-button";
 
 interface MarkdownRendererProps {
   children: string;
+  className?: string;
 }
 
-export function Markdown({ children }: MarkdownRendererProps) {
+export function Markdown({ children, className }: MarkdownRendererProps) {
   const fixedMarkdown = children
     .replace(/\\\[(.*?)\\\]/gs, "$$$1$$") // display math
     .replace(/\\\((.*?)\\\)/gs, "$$$1$"); // inline math
 
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[
-        rehypeRaw,
-        [
-          rehypeSanitize,
-          {
-            ...defaultSchema,
-            attributes: {
-              ...defaultSchema.attributes,
-              code: [
-                ...(defaultSchema.attributes?.code || []),
-                ["className", /^language-./],
-              ],
+    <div className={cn("prose dark:prose-invert max-w-none break-words leading-normal prose-p:leading-relaxed prose-pre:p-0 prose-pre:m-0 prose-pre:bg-transparent", className)}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+        rehypePlugins={[
+          rehypeRaw,
+          [
+            rehypeSanitize,
+            {
+              ...defaultSchema,
+              attributes: {
+                ...defaultSchema.attributes,
+                code: [
+                  ...(defaultSchema.attributes?.code || []),
+                  ["className", /^language-./],
+                ],
+              },
             },
-          },
-        ],
-        rehypeKatex,
-      ]}
-      components={COMPONENTS as any}
-    >
-      {fixedMarkdown}
-    </ReactMarkdown>
+          ],
+          rehypeKatex,
+        ]}
+        components={COMPONENTS as any}
+      >
+        {fixedMarkdown}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -234,12 +238,12 @@ const CodeBlock = ({
       : childrenTakeAllStringContents(children);
 
   const preClass = cn(
-    "w-full whitespace-pre-wrap rounded-md border bg-background/50 p-4 font-mono text-sm [scrollbar-width:none]",
+    "w-full whitespace-pre-wrap rounded-md border bg-background/50 p-4 font-mono text-sm [scrollbar-width:none] my-2",
     className
   );
 
   return (
-    <div className="group/code relative">
+    <div className="group/code relative not-prose">
       <Suspense
         fallback={
           <pre className={preClass} {...restProps}>
@@ -279,12 +283,6 @@ function childrenTakeAllStringContents(element: any): string {
 }
 
 const COMPONENTS = {
-  h1: withClass("h1", "text-xl font-semibold mb-2 mt-2"),
-  h2: withClass("h2", "font-semibold text-lg mb-2 mt-2"),
-  h3: withClass("h3", "font-semibold text-base mb-1 mt-1"),
-  h4: withClass("h4", "font-semibold text-sm mb-1 mt-2"),
-  h5: withClass("h5", "font-medium mb-1 mt-1"),
-  strong: withClass("strong", "font-semibold"),
   a: ({ children, href, ...props }: any) => {
     const handleClick = async (e: React.MouseEvent) => {
       e.preventDefault();
@@ -300,7 +298,7 @@ const COMPONENTS = {
     return (
       <a
         href={href}
-        className="text-gray-600 underline underline-offset-2 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100 cursor-pointer"
+        className="font-medium underline underline-offset-2 cursor-pointer"
         onClick={handleClick}
         {...props}
       >
@@ -308,10 +306,6 @@ const COMPONENTS = {
       </a>
     );
   },
-  blockquote: withClass(
-    "blockquote",
-    "border-l-4 border-primary pl-4 my-2 italic"
-  ),
   code: ({ children, className, ...rest }: any) => {
     const match = /language-(\w+)/.exec(className || "");
     return match ? (
@@ -321,7 +315,7 @@ const COMPONENTS = {
     ) : (
       <code
         className={cn(
-          "font-mono [:not(pre)>&]:rounded-md [:not(pre)>&]:bg-background/50 [:not(pre)>&]:px-1 [:not(pre)>&]:py-0.5"
+          "font-mono rounded-md bg-muted/50 px-1 py-0.5 before:content-none after:content-none"
         )}
         {...rest}
       >
@@ -330,39 +324,11 @@ const COMPONENTS = {
     );
   },
   pre: ({ children }: any) => children,
-  ol: withClass("ol", "list-decimal pl-6 my-1 space-y-1"),
-  ul: withClass("ul", "list-disc pl-6 my-1 space-y-1"),
-  li: withClass("li", "my-0 leading-tight"),
-  table: withClass(
-    "table",
-    "w-full border-collapse overflow-y-auto rounded-md border border-foreground/20 my-2"
-  ),
-  thead: withClass("thead", "bg-foreground/10"),
-  th: withClass(
-    "th",
-    "border border-foreground/20 px-4 py-1 text-left font-bold [&[align=center]]:text-center [&[align=right]]:text-right"
-  ),
-  td: withClass(
-    "td",
-    "border border-foreground/20 px-4 py-1 text-left [&[align=center]]:text-center [&[align=right]]:text-right"
-  ),
-  tr: withClass("tr", "m-0 border-t p-0 even:bg-muted/50"),
-  p: withClass("p", "whitespace-pre-wrap mb-2"),
-  hr: withClass("hr", "border-foreground/20 my-4"),
-  img: withClass("img", "max-w-full h-auto rounded-md my-2"),
   // Support for task lists
   input: ({ node, ...props }: any) => {
     if (node.properties.type === "checkbox") {
-      return <input type="checkbox" className="mr-2" {...props} disabled />;
+      return <input type="checkbox" className="mr-2 my-0 inline-block align-middle" {...props} disabled />;
     }
     return <input {...props} />;
   },
 };
-
-function withClass(Tag: any, classes: string) {
-  const Component = ({ ...props }: any) => (
-    <Tag className={classes} {...props} />
-  );
-  Component.displayName = Tag;
-  return Component;
-}
