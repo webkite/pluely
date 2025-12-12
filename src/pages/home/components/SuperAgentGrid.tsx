@@ -29,13 +29,13 @@ const agents: SuperAgent[] = [
   },
   {
     icon: Table,
-    name: "AI Spreadsheet",
+    name: "AI Sheet",
     description: "Analyze data and formulas",
     prompt: "I need help with spreadsheets and data analysis. Can you act as a data analyst?",
   },
   {
     icon: Users,
-    name: "AI Meeting Advisor",
+    name: "AI Meeting",
     description: "Prepare for meetings",
     prompt: "I have an important meeting coming up. Can you help me prepare and act as my advisor?",
   },

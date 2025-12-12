@@ -56,6 +56,14 @@ const View = () => {
       !messages?.messages.length
     ) {
       hasAutoSubmittedRef.current = true;
+
+      // Initialize toggle states if provided
+      if (typeof state.initialDeepThinkingEnabled === "boolean") {
+        completion.setIsDeepThinkingEnabled(state.initialDeepThinkingEnabled);
+      }
+      if (typeof state.initialWebSearchEnabled === "boolean") {
+        completion.setIsWebSearchEnabled(state.initialWebSearchEnabled);
+      }
       
       // Initialize with files if present
       if (state.initialFiles?.length) {
@@ -78,7 +86,15 @@ const View = () => {
       // Clear the state so refreshing doesn't re-submit
       window.history.replaceState({}, document.title);
     }
-  }, [location.state, completion.submit, completion.isLoading, messages, completion.setState]);
+  }, [
+    location.state,
+    completion.submit,
+    completion.isLoading,
+    messages,
+    completion.setState,
+    completion.setIsDeepThinkingEnabled,
+    completion.setIsWebSearchEnabled,
+  ]);
 
   useEffect(() => {
     const getMessages = async () => {

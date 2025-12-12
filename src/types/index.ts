@@ -10,6 +10,8 @@ export * from "./shortcuts";
 export interface RouterState {
   initialInput?: string;
   initialFiles?: AttachedFile[];
+  initialDeepThinkingEnabled?: boolean;
+  initialWebSearchEnabled?: boolean;
   agentContext?: {
     name: string;
     prompt: string;
